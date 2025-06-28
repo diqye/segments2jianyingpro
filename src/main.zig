@@ -5,6 +5,7 @@
 const json = std.json;
 const testing = std.testing;
 const debug = std.debug;
+const version = "version-0.1.0";
 
 
 const Jianying = struct {
@@ -266,7 +267,19 @@ const Jianying = struct {
         const raw = @embedFile("asserts/draft_meta_info.min.json");
         var file = try self.dir.?.createFile("draft_meta_info.json", .{.truncate = true});
         defer file.close();
-        try file.writeAll(raw);
+        // 修改创建时间
+        // 1749701101897989
+        // 1749701145657644
+        const now = std.time.microTimestamp();
+        const now_str = try std.fmt.allocPrint(self.arena.allocator(), "{d}", .{now});
+        defer self.arena.allocator().free(now_str);
+
+        const row_updated = try std.mem.replaceOwned(u8, self.arena.allocator(), raw, "1749701101897989", now_str);
+        defer self.arena.allocator().free(row_updated);
+        const row_updated_2 = try std.mem.replaceOwned(u8, self.arena.allocator(), row_updated, "1749701145657644", now_str);
+        defer self.arena.allocator().free(row_updated_2);
+
+        try file.writeAll(row_updated_2);
     }
 
     fn findX(object: *json.ObjectMap,name: [] const u8) ?*json.Value {
@@ -464,7 +477,8 @@ fn download(url: [] const u8,dir: *std.fs.Dir) ![] const u8 {
 }
 
 
-fn take_video_segments(allocator:std.mem.Allocator,token:[] const u8) !struct {
+/// `is_product` Is enviroment
+fn take_video_segments(allocator:std.mem.Allocator,token:[] const u8,is_product:bool) !struct {
     parsed: json.Parsed(APIResult),
     _inner: std.ArrayList(u8),
 
@@ -473,7 +487,15 @@ fn take_video_segments(allocator:std.mem.Allocator,token:[] const u8) !struct {
         self._inner.deinit();
     }
 }{
-    const api: [] const u8 = "https://test-jx-admin-api.zmexing.com/aiPlot/v1/videoklipMessage";
+    
+    const api: [] const u8,const log_str: [] const u8 = if(is_product) .{
+        "https://jx-admin-api.zmexing.com/aiPlot/v1/videoklipMessage",
+        "生产环境\n",
+    } else .{
+        "https://test-jx-admin-api.zmexing.com/aiPlot/v1/videoklipMessage",
+        "测试环境\n",
+    };
+    std.debug.print("{s}", .{log_str});
     var response_body = std.ArrayList(u8).init(allocator);
 
     const headers = [_]std.http.Header {
@@ -500,7 +522,7 @@ fn take_video_segments(allocator:std.mem.Allocator,token:[] const u8) !struct {
 
 test "take" {
     const allocator = std.testing.allocator;
-    var segment = try take_video_segments(allocator, "AAABo2hU/ypeOeNhaT8sb5snsbvCozyX");
+    var segment = try take_video_segments(allocator, "AAABo2hU/ypeOeNhaT8sb5snsbvCozyX",false);
     defer segment.deinit();
 
     std.debug.print("{s}\n", .{segment.parsed.value.data.content.concatVideos[0].video});
@@ -690,12 +712,17 @@ pub fn main() !void {
     const program_name = arg.next() orelse "";
     const token = arg.next() orelse "";
 
-    if(std.mem.eql(u8, token, "")) {
-        std.debug.print("请传入token\n\n示例: {s} token\n", .{program_name});
+    if(std.mem.eql(u8, token, "") or std.mem.eql(u8, token, "version")) {
+        std.debug.print("{s} {s}\n示例: {s} token\n", .{program_name,version,program_name});
         std.process.exit(0);
     }
-
-    var segment = try take_video_segments(allocator, token);
+    var token_buffer: [25] u8 = undefined;
+    const Environment = enum(u8){
+        product = 0b0000_0001,
+    };
+    try std.base64.standard_no_pad.Decoder.decode(&token_buffer, token);
+    const is_product = @intFromEnum(Environment.product) & token_buffer[0] != 0;
+    var segment = try take_video_segments(allocator, token,is_product);
     defer segment.deinit();
 
     const data = &segment.parsed.value.data;
